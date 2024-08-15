@@ -71,26 +71,44 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compile the Solidity file
-	bytecode, abi, err := compileSolidity(filePath)
+	bytecode, abi, err := compileSolidity(handler.Filename)
 	// fmt.Println(bytecode, abi, err)
 	if err != nil {
 		http.Error(w, "Failed to compile Solidity file", http.StatusInternalServerError)
 		return
 	}
 
-	// Deploy the contract
-	address, deployTime, err := deployContract(bytecode, abi)
-	if err != nil {
-		http.Error(w, "Failed to deploy contract", http.StatusInternalServerError)
-		return
+	response := Response{
+		Code: 200,
+		Msg: "success",
+		Data: ResponseData {
+			ABI: abi,
+			Bytecode: bytecode,
+		},
+	}
+	jsonResponse, err := json.Marshal(response)
+	if err!= nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+        return
 	}
 
-	// // Return deployment info
-	fmt.Fprintf(w, "Deployed contract at address: %s\nDeployment time: %s\n", address.Hex(), deployTime)
+	// 设置内容类型为 JSON 并返回响应
+    w.Header().Set("Content-Type", "application/json")
+    w.WriteHeader(http.StatusOK)
+    w.Write(jsonResponse)
+	// Deploy the contract
+	// address, deployTime, err := deployContract(bytecode, abi)
+	// if err != nil {
+	// 	http.Error(w, "Failed to deploy contract", http.StatusInternalServerError)
+	// 	return
+	// }
+
+	// // // Return deployment info
+	// fmt.Fprintf(w, "Deployed contract at address: %s\nDeployment time: %s\n", address.Hex(), deployTime)
 }
 
-func compileSolidity(filePath string) (string, string, error) {
-	fmt.Println(filePath)
+func compileSolidity(filename string) (string, string, error) {
+	filePath := "./contracts/" + filename
 	// 构建solc命令
 	cmd := exec.Command("solc",
 		"--include-path", "node_modules/",
@@ -110,15 +128,16 @@ func compileSolidity(filePath string) (string, string, error) {
 	}
 
 	// Access the ABI and Bytecode
-	contractKey := "contracts/MyNFT.sol:MyNFT" // Adjust this according to your contract's key in the JSON
-	contract := solOutput.Contracts[contractKey]
-	abi, err := json.Marshal(contract.ABI)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal ABI: %v", err)
-	}
+	fmt.Println(solOutput.Contracts)
 
-	bytecode := contract.Bytecode
-	return bytecode, string(abi), nil
+	for _, data := range solOutput.Contracts {
+		abi, err := json.Marshal(data.ABI)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to marshal ABI: %v", err)
+		}
+		return data.Bytecode, string(abi), nil
+	}
+	return "", "", nil
 }
 
 func deployContract(bytecode string, abi string) (common.Address, string, error) {
@@ -128,6 +147,7 @@ func deployContract(bytecode string, abi string) (common.Address, string, error)
 	}
 
 	privateKey, err := crypto.HexToECDSA(os.Getenv("YOUR_PRIVATE_KEY"))
+
 	if err != nil {
 		return common.Address{}, "", err
 	}
@@ -155,36 +175,22 @@ func deployContract(bytecode string, abi string) (common.Address, string, error)
 }
 
 func main() {
-	http.HandleFunc("/api", handleRequest)
+	http.HandleFunc("/api/ask-gpt", askHandler)
 	http.HandleFunc("/api/upload", uploadHandler)
 	fmt.Println("Server started at http://localhost:8080")
 	http.ListenAndServe(":8080", corsMiddleware(http.DefaultServeMux))
 }
 
-// Response defines the structure of the JSON response
-type Response struct {
-	Msg  string      `json:"msg"`
-	Code int         `json:"code"`
-	Data interface{} `json:"data"`
+// 定义数据结构
+type ResponseData struct {
+    ABI      string `json:"abi"`
+    Bytecode string `json:"bytecode"`
 }
 
-// Example request handler
-func handleRequest(w http.ResponseWriter, r *http.Request) {
-	// w.Write([]byte("Hello, CORS!"))
-	// Define the response object
-	response := Response{
-		Msg:  "Success",
-		Code: 200,
-		Data: map[string]string{"example": "value"},
-	}
-
-	// Set the content type to application/json
-	w.Header().Set("Content-Type", "application/json")
-
-	// Encode the response object to JSON and write it to the response
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+type Response struct {
+    Code int         `json:"code"`
+    Msg  string      `json:"msg"`
+    Data ResponseData `json:"data"`
 }
 
 // CORS Middleware
