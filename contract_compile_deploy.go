@@ -211,8 +211,6 @@ func askHandler(w http.ResponseWriter, r *http.Request) {
 		log.Fatalf("Error: 'content' field is missing or not a valid map")
 	}
 
-	fmt.Println("content>>", content)
-
 	// 将 JSON 字符串解析为结构体
 	var contentJson map[string]interface{}
 	err2 := json.Unmarshal([]byte(content), &contentJson)
@@ -223,8 +221,6 @@ func askHandler(w http.ResponseWriter, r *http.Request) {
 	explanation, _ := contentJson["explanation"].(string)
 	vulnerabilities, _ := contentJson["vulnerabilities"].(string)
 	improvements, _ := contentJson["improvements"].(string)
-	fmt.Println("explanation", explanation)
-	fmt.Println("vulnerabilities", vulnerabilities)
 	// 生成响应体
 	responseBody2 := GptResponseBody{
 		Code: 200,
