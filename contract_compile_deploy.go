@@ -59,6 +59,7 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Compile the Solidity file
 	bytecode, abi, err := compileSolidity(handler.Filename)
+
 	if err != nil {
 		http.Error(w, "Failed to compile Solidity file", http.StatusInternalServerError)
 		return
@@ -82,6 +83,15 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonResponse)
+	// Deploy the contract
+	// address, deployTime, err := deployContract(bytecode, abi)
+	// if err != nil {
+	// 	http.Error(w, "Failed to deploy contract", http.StatusInternalServerError)
+	// 	return
+	// }
+
+	// // // Return deployment info
+	// fmt.Fprintf(w, "Deployed contract at address: %s\nDeployment time: %s\n", address.Hex(), deployTime)
 }
 
 func compileSolidity(filename string) (string, string, error) {
@@ -143,7 +153,7 @@ func askHandler(w http.ResponseWriter, r *http.Request) {
 			},
 			{
 				Role: "user",
-				Content: "I will provide the content of a smart contract. Please analyze the contract and return the results in JSON format with the following three fields: explanation, vulnerabilities, and improvements. vulnerabilities and improvements should be string array\n" +
+				Content: "I will provide the content of a smart contract. Please analyze the contract and return the results in JSON format with the following three fields: explanation, vulnerabilities, and improvements. All fields are string type.\n" +
 					"1. A brief explanation of the contract.\n" +
 					"2. Any vulnerabilities or issues present in the contract. If there are no issues, please indicate that there are no recommendations.\n" +
 					"3. If vulnerabilities or issues are identified, please provide suggested improvements. If there are no vulnerabilities, please indicate that there are no vulnerabilities.\n" +
@@ -201,6 +211,8 @@ func askHandler(w http.ResponseWriter, r *http.Request) {
 		log.Fatalf("Error: 'content' field is missing or not a valid map")
 	}
 
+	fmt.Println("content>>", content)
+
 	// 将 JSON 字符串解析为结构体
 	var contentJson map[string]interface{}
 	err2 := json.Unmarshal([]byte(content), &contentJson)
@@ -209,8 +221,10 @@ func askHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	// 提取 content 对象中的字段
 	explanation, _ := contentJson["explanation"].(string)
-	vulnerabilities, _ := contentJson["vulnerabilities"].([]string)
-	improvements, _ := contentJson["improvements"].([]string)
+	vulnerabilities, _ := contentJson["vulnerabilities"].(string)
+	improvements, _ := contentJson["improvements"].(string)
+	fmt.Println("explanation", explanation)
+	fmt.Println("vulnerabilities", vulnerabilities)
 	// 生成响应体
 	responseBody2 := GptResponseBody{
 		Code: 200,
@@ -267,9 +281,9 @@ type GptResponseBody struct {
 
 // 响应体的结构体
 type GptResponseContentBody struct {
-	Explanation     string   `json:"explanation"`
-	Vulnerabilities []string `json:"vulnerabilities"`
-	Improvements    []string `json:"improvements"`
+	Explanation     string `json:"explanation"`
+	Vulnerabilities string `json:"vulnerabilities"`
+	Improvements    string `json:"improvements"`
 }
 
 // 请求体的结构体
