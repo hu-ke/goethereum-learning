@@ -1,20 +1,23 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
+	"github.com/joho/godotenv"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
-	"encoding/json"
-	"time"
-	"math/big"
-	"strings"
-	"github.com/ethereum/go-ethereum/common"
+	// "time"
+	// "math/big"
+	// "strings"
+	// "github.com/ethereum/go-ethereum/common"
 	// "github.com/ethereum/go-ethereum/accounts/abi"
-	"github.com/ethereum/go-ethereum/accounts/abi/bind"
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/ethereum/go-ethereum/ethclient"
+	// "github.com/ethereum/go-ethereum/accounts/abi/bind"
+	// "github.com/ethereum/go-ethereum/crypto"
+	// "github.com/ethereum/go-ethereum/ethclient"
 )
 
 type SolidityOutput struct {
@@ -24,28 +27,12 @@ type SolidityOutput struct {
 	} `json:"contracts"`
 }
 
-// extractBetween extracts a substring between two delimiters.
-func extractBetween(value, a, b string) string {
-	posFirst := strings.Index(value, a)
-	if posFirst == -1 {
-		return ""
-	}
-	posFirstAdjusted := posFirst + len(a)
-	posLast := strings.Index(value[posFirstAdjusted:], b)
-	if posLast == -1 {
-		return ""
-	}
-	posLastAdjusted := posFirstAdjusted + posLast
-	return strings.TrimSpace(value[posFirstAdjusted:posLastAdjusted])
-}
-
 func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
 		return
 	}
 	file, handler, err := r.FormFile("solidity")
-	fmt.Println(file)
 	if err != nil {
 		http.Error(w, "Failed to get file", http.StatusBadRequest)
 		return
@@ -71,26 +58,34 @@ func uploadHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Compile the Solidity file
-	bytecode, abi, err := compileSolidity(filePath)
-	// fmt.Println(bytecode, abi, err)
+	bytecode, abi, err := compileSolidity(handler.Filename)
 	if err != nil {
 		http.Error(w, "Failed to compile Solidity file", http.StatusInternalServerError)
 		return
 	}
 
-	// Deploy the contract
-	address, deployTime, err := deployContract(bytecode, abi)
+	response := Response{
+		Code: 200,
+		Msg:  "success",
+		Data: ResponseData{
+			ABI:      abi,
+			Bytecode: bytecode,
+		},
+	}
+	jsonResponse, err := json.Marshal(response)
 	if err != nil {
-		http.Error(w, "Failed to deploy contract", http.StatusInternalServerError)
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	// // Return deployment info
-	fmt.Fprintf(w, "Deployed contract at address: %s\nDeployment time: %s\n", address.Hex(), deployTime)
+	// 设置内容类型为 JSON 并返回响应
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	w.Write(jsonResponse)
 }
 
-func compileSolidity(filePath string) (string, string, error) {
-	fmt.Println(filePath)
+func compileSolidity(filename string) (string, string, error) {
+	filePath := "./contracts/" + filename
 	// 构建solc命令
 	cmd := exec.Command("solc",
 		"--include-path", "node_modules/",
@@ -110,81 +105,180 @@ func compileSolidity(filePath string) (string, string, error) {
 	}
 
 	// Access the ABI and Bytecode
-	contractKey := "contracts/MyNFT.sol:MyNFT" // Adjust this according to your contract's key in the JSON
-	contract := solOutput.Contracts[contractKey]
-	abi, err := json.Marshal(contract.ABI)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal ABI: %v", err)
-	}
+	fmt.Println(solOutput.Contracts)
 
-	bytecode := contract.Bytecode
-	return bytecode, string(abi), nil
+	for _, data := range solOutput.Contracts {
+		abi, err := json.Marshal(data.ABI)
+		if err != nil {
+			return "", "", fmt.Errorf("failed to marshal ABI: %v", err)
+		}
+		return data.Bytecode, string(abi), nil
+	}
+	return "", "", nil
 }
 
-func deployContract(bytecode string, abi string) (common.Address, string, error) {
-	client, err := ethclient.Dial("https://sepolia.infura.io/v3/" + infuraProjectID)
+func askHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Invalid request method", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 解析请求体
+	var reqBody GptRequestBody
+	if err := json.NewDecoder(r.Body).Decode(&reqBody); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	url := "https://api.openai.com/v1/chat/completions"
+	newReqBody := GptRequestBody2{
+		Model: "gpt-3.5-turbo",
+		Messages: []struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		}{
+			{
+				Role:    "system",
+				Content: "You are a helpful assistant.",
+			},
+			{
+				Role: "user",
+				Content: "I will provide the content of a smart contract. Please analyze the contract and return the results in JSON format with the following three fields: explanation, vulnerabilities, and improvements. vulnerabilities and improvements should be string array\n" +
+					"1. A brief explanation of the contract.\n" +
+					"2. Any vulnerabilities or issues present in the contract. If there are no issues, please indicate that there are no recommendations.\n" +
+					"3. If vulnerabilities or issues are identified, please provide suggested improvements. If there are no vulnerabilities, please indicate that there are no vulnerabilities.\n" +
+					"The contract content is as follows: " + reqBody.Contract,
+			},
+		},
+	}
+	reqBodyBytes, err := json.Marshal(newReqBody)
 	if err != nil {
-		return common.Address{}, "", err
+		log.Fatalf("Error marshalling request body: %v", err)
 	}
-
-	privateKey, err := crypto.HexToECDSA(os.Getenv("YOUR_PRIVATE_KEY"))
+	// 创建 HTTP 请求
+	req, err := http.NewRequest("POST", url, bytes.NewBuffer(reqBodyBytes))
 	if err != nil {
-		return common.Address{}, "", err
+		log.Fatalf("Error creating request: %v", err)
 	}
+	// 设置请求头
+	req.Header.Set("Content-Type", "application/json")
+	apiKey := os.Getenv("API_KEY")
+	req.Header.Set("Authorization", "Bearer "+apiKey) // 替换为实际的 API 密钥
 
-	auth, err := bind.NewKeyedTransactorWithChainID(privateKey, big.NewInt(11155111)) // Chain ID 1 for mainnet
+	// 发送请求
+	client := &http.Client{}
+	resp, err := client.Do(req)
 	if err != nil {
-		return common.Address{}, "", err
+		log.Fatalf("Error sending request: %v", err)
 	}
-
-	var StoreMetaData = &bind.MetaData{
-		ABI: abi,
-		Bin: bytecode,
-	}
-	parsed, err := StoreMetaData.GetAbi()
-
-	address, tx, _, err := bind.DeployContract(auth, *parsed, common.FromHex(bytecode), client)
-	fmt.Println("address", address)
-	fmt.Println(tx)
+	defer resp.Body.Close()
+	// 读取响应体
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return common.Address{}, "", err
+		log.Fatalf("Error reading response body: %v", err)
+	}
+	// 解析 JSON 响应体
+	var responseBody map[string]interface{}
+	err = json.Unmarshal(body, &responseBody)
+	if err != nil {
+		log.Fatalf("Error unmarshalling response body: %v", err)
+	}
+	// 从响应中提取内容
+	choices, ok := responseBody["choices"].([]interface{})
+	if !ok || len(choices) == 0 {
+		log.Fatalf("Error: 'choices' array is missing or empty")
+	}
+	firstChoice, ok := choices[0].(map[string]interface{})
+	if !ok {
+		log.Fatalf("Error: The first element in 'choices' is not a valid map")
+	}
+	message, ok := firstChoice["message"].(map[string]interface{})
+	if !ok {
+		log.Fatalf("Error: 'message' field is missing or not a valid map")
+	}
+	content, ok := message["content"].(string)
+	if !ok {
+		log.Fatalf("Error: 'content' field is missing or not a valid map")
 	}
 
-	deployTime := time.Now().Format(time.RFC3339)
-	return address, deployTime, nil
+	// 将 JSON 字符串解析为结构体
+	var contentJson map[string]interface{}
+	err2 := json.Unmarshal([]byte(content), &contentJson)
+	if err2 != nil {
+		log.Fatalf("Error unmarshalling JSON: %v", err2)
+	}
+	// 提取 content 对象中的字段
+	explanation, _ := contentJson["explanation"].(string)
+	vulnerabilities, _ := contentJson["vulnerabilities"].([]string)
+	improvements, _ := contentJson["improvements"].([]string)
+	// 生成响应体
+	responseBody2 := GptResponseBody{
+		Code: 200,
+		Msg:  "success",
+		Data: GptResponseContentBody{
+			Explanation:     explanation,
+			Vulnerabilities: vulnerabilities,
+			Improvements:    improvements,
+		},
+	}
+
+	// 设置响应头
+	w.Header().Set("Content-Type", "application/json")
+
+	// 编码响应体为 JSON
+	if err := json.NewEncoder(w).Encode(responseBody2); err != nil {
+		http.Error(w, "Failed to encode response body", http.StatusInternalServerError)
+		return
+	}
 }
 
 func main() {
-	http.HandleFunc("/api", handleRequest)
+	err := godotenv.Load()
+	if err != nil {
+		fmt.Println("Error loading .env file")
+	}
+	http.HandleFunc("/api/ask-gpt", askHandler)
 	http.HandleFunc("/api/upload", uploadHandler)
 	fmt.Println("Server started at http://localhost:8080")
 	http.ListenAndServe(":8080", corsMiddleware(http.DefaultServeMux))
 }
 
-// Response defines the structure of the JSON response
-type Response struct {
-	Msg  string      `json:"msg"`
-	Code int         `json:"code"`
-	Data interface{} `json:"data"`
+// 定义数据结构
+type ResponseData struct {
+	ABI      string `json:"abi"`
+	Bytecode string `json:"bytecode"`
 }
 
-// Example request handler
-func handleRequest(w http.ResponseWriter, r *http.Request) {
-	// w.Write([]byte("Hello, CORS!"))
-	// Define the response object
-	response := Response{
-		Msg:  "Success",
-		Code: 200,
-		Data: map[string]string{"example": "value"},
-	}
+type Response struct {
+	Code int          `json:"code"`
+	Msg  string       `json:"msg"`
+	Data ResponseData `json:"data"`
+}
 
-	// Set the content type to application/json
-	w.Header().Set("Content-Type", "application/json")
+// 请求体的结构体
+type GptRequestBody struct {
+	Contract string `json:"contract"`
+}
+type GptResponseBody struct {
+	Code int                    `json:"code"`
+	Msg  string                 `json:"msg"`
+	Data GptResponseContentBody `json:"data"`
+}
 
-	// Encode the response object to JSON and write it to the response
-	if err := json.NewEncoder(w).Encode(response); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-	}
+// 响应体的结构体
+type GptResponseContentBody struct {
+	Explanation     string   `json:"explanation"`
+	Vulnerabilities []string `json:"vulnerabilities"`
+	Improvements    []string `json:"improvements"`
+}
+
+// 请求体的结构体
+type GptRequestBody2 struct {
+	Model    string `json:"model"`
+	Messages []struct {
+		Role    string `json:"role"`
+		Content string `json:"content"`
+	} `json:"messages"`
 }
 
 // CORS Middleware
